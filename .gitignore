@@ -1,0 +1,11 @@
+node_modules/
+__pycache__/
+*.pyc
+.env
+/outputs
+/uploads
+.next/
+.DS_Store
+venv/
+.venv/
+*.mp4
