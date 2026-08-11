@@ -9,3 +9,5 @@ __pycache__/
 venv/
 .venv/
 *.mp4
+phase-0-core-pipeline/sample_input/
+phase-0-core-pipeline/output/

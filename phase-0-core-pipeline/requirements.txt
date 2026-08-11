@@ -1,0 +1,13 @@
+openai-whisper==20250625
+torch==2.13.0
+opencv-python==5.0.0.93
+mediapipe==1.0.0
+numpy==2.4.6
+
+# ffmpeg is a system binary (not installable via pip) and must be
+# available on PATH separately. Confirmed present with libass/libx264
+# support during Phase 0 development.
+#
+# fastapi / uvicorn / pydantic live in the shared project venv but are
+# intentionally NOT listed here: no Phase 0 code imports them. They
+# belong in Phase 1's requirements.txt once the FastAPI wrapper is built.
