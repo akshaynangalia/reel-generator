@@ -31,6 +31,18 @@ HIGHLIGHT_KEYWORDS = {
     "ridiculous", "wild", "brutal", "genius", "terrible", "perfect",
 }
 
+# Same idea as HIGHLIGHT_KEYWORDS, in Devanagari-script Hindi. Checked
+# together with the English list on every segment (never switched
+# per-video) so mixed Hindi-English "Hinglish" speech still scores hits
+# from whichever language a given phrase happens to use.
+HIGHLIGHT_KEYWORDS_HI = {
+    "अद्भुत", "अविश्वसनीय", "शानदार", "बेहतरीन", "जबरदस्त", "कमाल",
+    "सनसनीखेज", "हैरान", "पागल", "विशाल", "सच", "राज़", "गलती",
+    "गलत", "नफरत", "प्यार", "बेकार", "बर्बाद", "वाह",
+}
+
+ALL_KEYWORDS = HIGHLIGHT_KEYWORDS | HIGHLIGHT_KEYWORDS_HI
+
 SAMPLE_RATE = 16000
 ENERGY_FRAME_MS = 20
 
@@ -54,12 +66,18 @@ MERGE_GAP_SEC = 1.5
 THRESHOLD_STDEV_MULT = 1.0
 
 
-def detect_highlights(transcript: dict, video_path: Path, max_clips: int = 3) -> list[dict]:
+def detect_highlights(transcript: dict, video_path: Path) -> list[dict]:
     """
     Score transcript segments, merge them into candidate highlight
-    windows, and return the top `max_clips` qualifying windows as:
+    windows, and return ALL qualifying windows (score-sorted,
+    non-overlapping) as:
         {"start": float, "end": float, "score": float,
          "segment_ids": [int, ...], "segment_scores": {id: float, ...}}
+
+    Capping how many of these are actually turned into clips is the
+    caller's job (see pipeline.py's _select_non_overlapping_clips) --
+    it happens *after* 30-60s clip-bound expansion, since two windows
+    that don't overlap here can still expand into each other's space.
 
     Raises NoHighlightFoundError if nothing clears the selection threshold.
     """
@@ -98,7 +116,17 @@ def detect_highlights(transcript: dict, video_path: Path, max_clips: int = 3) ->
     # Explicit tie-break on start time keeps selection deterministic even
     # when two windows score exactly equal.
     qualifying.sort(key=lambda w: (-w["score"], w["start"]))
-    selected = qualifying[:max_clips]
+
+    # Defensive overlap guard: on real (time-ordered) Whisper output,
+    # _merge_into_windows already can't produce overlapping windows, so
+    # this is normally a no-op. It exists for robustness against a
+    # transcript with out-of-order segments, which would otherwise be
+    # able to produce overlapping windows here.
+    selected: list[dict] = []
+    for window in qualifying:
+        if any(window["start"] < s["end"] and window["end"] > s["start"] for s in selected):
+            continue
+        selected.append(window)
 
     for window in selected:
         window["segment_scores"] = {
@@ -116,9 +144,11 @@ def detect_highlights(transcript: dict, video_path: Path, max_clips: int = 3) ->
 
 def _keyword_score(text: str) -> float:
     lowered = text.lower()
-    words = re.findall(r"[a-z']+", lowered)
+    # Alternation (not a merged character class) so an unspaced
+    # Latin+Devanagari run can't fuse into one bogus token.
+    words = re.findall(r"[a-z']+|[ऀ-ॿ]+", lowered)
     word_count = max(len(words), 1)
-    keyword_hits = sum(1 for w in words if w in HIGHLIGHT_KEYWORDS)
+    keyword_hits = sum(1 for w in words if w in ALL_KEYWORDS)
     punctuation_hits = text.count("!") + text.count("?")
     return (keyword_hits / word_count) + (0.5 * punctuation_hits)
 

@@ -38,6 +38,11 @@ MIN_DETECTION_CONFIDENCE = 0.5
 # = more responsive/jittery, lower = smoother/laggier.
 EMA_ALPHA = 0.18
 
+# If no face is detected for longer than this, the crop falls back to a
+# safe center-crop position rather than holding the last known tracked
+# position frozen (sendcmd's hold is a step function -- see reframe.py).
+FACE_TIMEOUT_SEC = 1.75
+
 # Target 9:16 vertical aspect ratio for the crop box.
 TARGET_ASPECT_W = 9
 TARGET_ASPECT_H = 16
@@ -53,7 +58,12 @@ def track_face(clip_path: Path) -> dict:
           "centers": [{"t": float, "cx": int, "cy": int}, ...],
         }
     `centers` has one entry (the whole-clip fallback center) when no face
-    was detected, or one entry per sampled+smoothed timestamp otherwise.
+    was detected anywhere in the clip. Otherwise it has one entry per
+    sampled+smoothed timestamp, PLUS a synthetic center-crop entry
+    inserted wherever a detection gap exceeds FACE_TIMEOUT_SEC (and one
+    trailing entry if the face is lost near the end and never
+    reacquired) -- reframe.py doesn't need to know the difference, since
+    every entry has the same {"t", "cx", "cy"} shape.
     """
     cap = cv2.VideoCapture(str(clip_path))
     if not cap.isOpened():
@@ -63,29 +73,48 @@ def track_face(clip_path: Path) -> dict:
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
         crop_width, crop_height = _crop_dimensions(width, height)
 
         raw_centers = _detect_face_centers(cap, fps, width, height)
     finally:
         cap.release()
 
+    fallback_cx, fallback_cy = _clamp_center(width / 2, height / 2, width, height, crop_width, crop_height)
+
     if not raw_centers:
         logger.info("No face detected in %s -- using center-crop fallback.", clip_path)
-        cx, cy = _clamp_center(width / 2, height / 2, width, height, crop_width, crop_height)
         return {
             "face_detected": False,
             "source_width": width,
             "source_height": height,
             "crop_width": crop_width,
             "crop_height": crop_height,
-            "centers": [{"t": 0.0, "cx": cx, "cy": cy}],
+            "centers": [{"t": 0.0, "cx": fallback_cx, "cy": fallback_cy}],
         }
 
-    smoothed = _smooth_centers(raw_centers)
+    # Split at any gap > FACE_TIMEOUT_SEC and smooth each run independently
+    # (a fresh _smooth_centers call per run resets the EMA, so tracking
+    # never eases back in from a stale pre-gap position after a timeout).
+    runs = _split_into_runs(raw_centers)
     centers = []
-    for t, cx, cy in smoothed:
-        cx, cy = _clamp_center(cx, cy, width, height, crop_width, crop_height)
-        centers.append({"t": t, "cx": cx, "cy": cy})
+    for run_index, run in enumerate(runs):
+        if run_index > 0:
+            prev_run_end_t = runs[run_index - 1][-1][0]
+            centers.append({"t": prev_run_end_t + FACE_TIMEOUT_SEC, "cx": fallback_cx, "cy": fallback_cy})
+        for t, cx, cy in _smooth_centers(run):
+            cx, cy = _clamp_center(cx, cy, width, height, crop_width, crop_height)
+            centers.append({"t": t, "cx": cx, "cy": cy})
+
+    # Symmetric handling for a face lost near the end and never
+    # reacquired -- otherwise the crop would freeze on the last tracked
+    # position all the way to the clip's end. CAP_PROP_FRAME_COUNT is
+    # unreliable on some containers, so this is skipped (not guessed at)
+    # when it's unavailable.
+    last_run_end_t = runs[-1][-1][0]
+    duration = (frame_count / fps) if frame_count and frame_count > 0 else None
+    if duration is not None and duration - last_run_end_t > FACE_TIMEOUT_SEC:
+        centers.append({"t": last_run_end_t + FACE_TIMEOUT_SEC, "cx": fallback_cx, "cy": fallback_cy})
 
     return {
         "face_detected": True,
@@ -196,3 +225,17 @@ def _smooth_centers(raw_centers: list[tuple[float, float, float]]) -> list[tuple
             ema_cy = EMA_ALPHA * cy + (1 - EMA_ALPHA) * ema_cy
         smoothed.append((t, ema_cx, ema_cy))
     return smoothed
+
+
+def _split_into_runs(
+    raw_centers: list[tuple[float, float, float]], timeout_sec: float = FACE_TIMEOUT_SEC
+) -> list[list[tuple[float, float, float]]]:
+    """Split `raw_centers` (assumed non-empty) into contiguous runs,
+    starting a new run wherever the gap between two consecutive
+    detections exceeds `timeout_sec`."""
+    runs = [[raw_centers[0]]]
+    for prev, cur in zip(raw_centers, raw_centers[1:]):
+        if cur[0] - prev[0] > timeout_sec:
+            runs.append([])
+        runs[-1].append(cur)
+    return runs

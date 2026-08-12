@@ -6,8 +6,8 @@ Runs the full Phase 0 pipeline against a single input video:
   per highlight: segment -> face track -> reframe -> captions -> final.mp4
 
 Usage:
-    python pipeline.py <input_video> [--output-dir DIR] [--model-size base]
-                        [--max-clips 3] [--force-retranscribe]
+    python pipeline.py <input_video> [--output-dir DIR] [--model-size small]
+                        [--max-clips 3] [--force-retranscribe] [--language hi]
 """
 
 import argparse
@@ -53,11 +53,15 @@ def main(argv: list[str] | None = None) -> None:
             video_output_dir,
             model_size=args.model_size,
             force_retranscribe=args.force_retranscribe,
+            language=args.language,
         )
 
-        highlights = highlight_detection.detect_highlights(
-            transcript, input_video, max_clips=args.max_clips
-        )
+        highlights = highlight_detection.detect_highlights(transcript, input_video)
+        accepted = _select_non_overlapping_clips(highlights, transcript, duration, args.max_clips)
+        if not accepted:
+            raise PipelineError(
+                "All highlight windows were rejected due to overlap after 30-60s expansion."
+            )
     except PipelineError as e:
         logger.error("Pipeline stopped: %s", e)
         sys.exit(1)
@@ -66,9 +70,9 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(1)
 
     produced = 0
-    for i, window in enumerate(highlights, start=1):
+    for i, (_, start, end) in enumerate(accepted, start=1):
         try:
-            _process_clip(i, window, transcript, input_video, video_output_dir, duration)
+            _process_clip(i, start, end, transcript, input_video, video_output_dir)
             produced += 1
         except Exception:
             logger.exception("Skipping clip %d due to an unexpected error.", i)
@@ -78,19 +82,49 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(1)
 
     logger.info(
-        "Done. %d/%d clip(s) produced in %s", produced, len(highlights), video_output_dir
+        "Done. %d/%d clip(s) produced in %s", produced, len(accepted), video_output_dir
     )
+
+
+def _select_non_overlapping_clips(
+    highlights: list[dict], transcript: dict, video_duration: float, max_clips: int
+) -> list[tuple[dict, float, float]]:
+    """
+    Expand each highlight window to its final 30-60s clip bounds and
+    greedily accept up to `max_clips` in score order, skipping any
+    candidate whose expanded bounds overlap an already-accepted clip.
+
+    `_merge_into_windows`/`detect_highlights` guarantee the *raw* windows
+    don't overlap, but segment.build_clip_bounds's 30-60s expansion can
+    still grow two originally-adjacent windows into each other's space --
+    this is where that real overlap is actually prevented. `highlights`
+    must be the full qualifying pool (not pre-capped to max_clips) so a
+    rejected candidate has a lower-ranked one to fall back on.
+    """
+    accepted: list[tuple[dict, float, float]] = []
+    for window in highlights:
+        if len(accepted) >= max_clips:
+            break
+        start, end = segment.build_clip_bounds(window, transcript, video_duration)
+        if any(start < a_end and end > a_start for _, a_start, a_end in accepted):
+            logger.info(
+                "Skipping highlight [%.1fs-%.1fs] -- expanded bounds [%.1fs-%.1fs] "
+                "overlap an already-selected clip.",
+                window["start"], window["end"], start, end,
+            )
+            continue
+        accepted.append((window, start, end))
+    return accepted
 
 
 def _process_clip(
     index: int,
-    window: dict,
+    start: float,
+    end: float,
     transcript: dict,
     input_video: Path,
     video_output_dir: Path,
-    video_duration: float,
 ) -> None:
-    start, end = segment.build_clip_bounds(window, transcript, video_duration)
     clip_dir = video_output_dir / f"clip_{index:02d}_{start:.0f}-{end:.0f}s"
     clip_dir.mkdir(parents=True, exist_ok=True)
 
@@ -136,8 +170,14 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--model-size",
-        default="base",
-        help="Whisper model size (default: base -- tuned for CPU-only hardware).",
+        default=None,
+        help=(
+            "Whisper model size. Default: auto -- 'base' (tuned for "
+            "CPU-only hardware), auto-escalated to 'small' if the "
+            "detected/pinned language isn't English (base reliably "
+            "romanizes non-Latin scripts). Pass a value here to override "
+            "and disable auto-escalation."
+        ),
     )
     parser.add_argument(
         "--max-clips",
@@ -149,6 +189,15 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--force-retranscribe",
         action="store_true",
         help="Ignore any cached transcript and re-run Whisper.",
+    )
+    parser.add_argument(
+        "--language",
+        default=None,
+        help=(
+            "Pin transcription to this Whisper language code (e.g. 'en', "
+            "'hi'), skipping automatic detection. Default: auto-detect "
+            "from a short audio sample -- normally no need to set this."
+        ),
     )
     return parser.parse_args(argv)
 
