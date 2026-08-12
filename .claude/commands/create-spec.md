@@ -25,7 +25,7 @@ proceeding.
 
 ## Step 2 — Check for duplicate specs
 
-Read every file in `/specs/`. If a spec already exists for the same or a
+Read every file in `.claude/specs`. If a spec already exists for the same or a
 very similar feature/phase, tell the user and ask whether to proceed
 anyway, overwrite, or stop.
 
@@ -36,7 +36,7 @@ Read these before writing anything, if they exist:
   conventions
 - Any existing `/phase-*/CLAUDE.md` files — what's already been built, so
   this spec doesn't duplicate or conflict with prior phases
-- Any existing `/specs/*.md` — prior specs, for consistency of style and to
+- Any existing `.claude/specs/*.md` — prior specs, for consistency of style and to
   catch overlap
 
 Early in the project these may not exist yet or may be sparse — that is
@@ -123,18 +123,18 @@ automated tests this phase includes.
 
 ## Step 5 — Save the spec
 
-Save to: `/specs/<feature_slug>.md`
+Save to: `.claude/specs/<feature_slug>.md`
 
-(Create the `/specs/` folder first if it doesn't exist.)
+(Create the `.claude/specs/` folder first if it doesn't exist.)
 
 ## Step 6 — Report to the user
 
 Print a short summary in this exact format:
 
-Spec file: /specs/<feature_slug>.md
+Spec file: .claude/specs/<feature_slug>.md
 Title: <feature_title>
 
-Then tell the user: "Review the spec at /specs/<feature_slug>.md, then
+Then tell the user: "Review the spec at .claude/specs/<feature_slug>.md, then
 enter Plan Mode with Shift+Tab twice to begin implementation."
 
 Do not print the full spec in chat unless explicitly asked.

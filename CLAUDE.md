@@ -1,3 +1,4 @@
+
 # CLAUDE.md — AI Reel Generator
 
 ## Project Overview
@@ -58,8 +59,8 @@ This project is built in phases, each covering one meaningful feature slice
 (not just backend or just frontend — a phase includes whatever slice of UI
 is needed to test that feature end-to-end). For each phase, the process is:
 
-1. Run the `/spec` custom command to generate a spec file for that phase in
-   `/specs/` — goals, scope, non-goals, file changes, acceptance criteria.
+1. Run the `/create-spec` custom command to generate a spec file for that phase in
+   `.claude/specs` — goals, scope, non-goals, file changes, acceptance criteria.
 2. Review the spec before proceeding.
 3. Enter Plan Mode referencing the approved spec to get an implementation
    plan (files to add/change, order of work, libraries needed).
@@ -77,7 +78,7 @@ deliberate process choice for this project, not a suggestion.
 
 - Each phase gets its own top-level folder, e.g. `/phase-0-core-pipeline`,
   `/phase-1-web-upload`, with its own `CLAUDE.md` once complete.
-- Specs live in `/specs/`, one file per phase/feature.
+- Specs live in `.claude/specs/`, one file per phase/feature.
 - Custom Claude Code commands live in `/.claude/commands/`.
 - This root `CLAUDE.md` covers project-wide, rarely-changing information
   only (stack, conventions, vision, constraints). It should be updated only
